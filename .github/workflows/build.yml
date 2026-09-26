@@ -1,0 +1,54 @@
+name: Build webOS IPK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 16
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Install webOS CLI
+        run: npm install --global @webos-tools/cli
+
+      - name: Validate metadata
+        run: |
+          node -e "const a=require('./app/appinfo.json'); const s=require('./service/package.json'); if (!s.name.startsWith(a.id + '.')) throw new Error('Service ID must be a subdomain of app ID'); console.log(a.id, a.version, s.name)"
+          ares-package --check app service
+
+      - name: Build IPK
+        run: |
+          mkdir -p dist
+          ares-package --no-minify --outdir dist app service
+          ls -lh dist
+          IPK="$(find dist -maxdepth 1 -type f -name '*.ipk' -print -quit)"
+          test -n "$IPK"
+          ares-package --info "$IPK"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webos-wifi-watch-ipk
+          path: dist/*.ipk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||             gh release create "$GITHUB_REF_NAME" --title "WiFi Watch $GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/*.ipk --clobber
